@@ -47,13 +47,19 @@ But you need to install boto3 first using the following command
 
 - change the following line in the beginning of the file
 `upload_directory.py` to use you own access key and secret key
-and you own bucket, you can also change the report interval
+and you own bucket, and to sepcif the acl of the file, you can
+also change the report interval and the schedule.
 
 ```python
 access_key = 'ziw5dp1alvty9n47qksu'
 secret_key = 'V+ZTZ5u5wNvXb+KP5g0dMNzhMeWe372/yRKx4hZV'
 bucket_name = 'renzhi-test-bucket'
+file_acl = 'public-read'
 report_interval = 30
+schedule = {
+    'start': '22:25',
+    'stop': '3:30',
+}
 ```
 
 - run the script whit arguments

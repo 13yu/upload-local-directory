@@ -6,16 +6,25 @@ import os
 import time
 
 import boto3
+import s3transfer
 from botocore.client import Config
 
 access_key = 'ziw5dp1alvty9n47qksu'
 secret_key = 'V+ZTZ5u5wNvXb+KP5g0dMNzhMeWe372/yRKx4hZV'
 bucket_name = 'renzhi-test-bucket'
+file_acl = 'public-read'
+
+
 report_interval = 30
 
 
 mega = 1024.0 * 1024.0
 
+
+schedule = {
+    'start': '22:25',
+    'stop': '3:30',
+}
 
 stat = {
     'bytes_uploaded': 0,
@@ -23,6 +32,18 @@ stat = {
     'bandwidth': 10,  # 10M
     'report_time': time.time(),
 }
+
+
+config = Config(signature_version='s3v4')
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=access_key,
+    aws_secret_access_key=secret_key,
+    config=config,
+    region_name='us-east-1',
+    endpoint_url='http://127.0.0.1',
+)
+s3_transfer = s3transfer.S3Transfer(s3_client)
 
 
 def filter_dir(dir_name):
@@ -95,23 +116,7 @@ def get_files_to_upload(dir_name, progress_file):
     return files_to_upload
 
 
-def get_s3_client():
-    config = Config(signature_version='s3v4')
-    s3 = boto3.client(
-        's3',
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=config,
-        region_name='us-east-1',
-        endpoint_url='http://127.0.0.1',
-    )
-
-    return s3
-
-
 def upload_one_file(file_name, base_len, key_prefix):
-    s3 = get_s3_client()
-
     file_parts = file_name.split('/')
     key = os.path.join(key_prefix, '/'.join(file_parts[base_len:]))
 
@@ -121,7 +126,8 @@ def upload_one_file(file_name, base_len, key_prefix):
         info['local_size'] = 0
 
         key = key + '/'
-        resp = s3.put_object(
+        resp = s3_client.put_object(
+            ACL=file_acl,
             Bucket=bucket_name,
             Key=key,
             Body=''
@@ -132,7 +138,7 @@ def upload_one_file(file_name, base_len, key_prefix):
             logger.error('failed to put object: %s %d' % (key, status))
             return
 
-        resp = s3.head_object(
+        resp = s3_client.head_object(
             Bucket=bucket_name,
             Key=key
         )
@@ -148,9 +154,10 @@ def upload_one_file(file_name, base_len, key_prefix):
     else:
         info['local_size'] = os.stat(file_name).st_size
 
-        s3.upload_file(file_name, bucket_name, key)
+        s3_transfer.upload_file(file_name, bucket_name,
+                                key, extra_args={'ACL': file_acl})
 
-        resp = s3.head_object(
+        resp = s3_client.head_object(
             Bucket=bucket_name,
             Key=key
         )
@@ -210,6 +217,8 @@ def upload_one_directory(dir_parts, base_len, key_prefix):
                         time_to_sleep)
             time.sleep(time_to_sleep)
 
+        check_schedule()
+
     fd.close()
 
 
@@ -231,6 +240,47 @@ def run(dir_name, key_prefix):
     print 'start to upload ' + dir_name + ' to ' + key_prefix
     for dir_parts in dir_iter(dir_name):
         upload_one_directory(dir_parts, base_len, key_prefix)
+
+
+def check_schedule():
+    start_h = int(schedule['start'].split(':')[0])
+    start_m = int(schedule['start'].split(':')[1])
+    stop_h = int(schedule['stop'].split(':')[0])
+    stop_m = int(schedule['stop'].split(':')[1])
+
+    start_m = start_m + start_h * 60
+    stop_m = stop_m + stop_h * 60
+
+    while True:
+        now = datetime.datetime.now()
+        now_h = now.hour
+        now_m = now.minute
+
+        now_m = now_m + now_h * 60
+
+        if start_m < stop_m:
+            if now_m >= start_m and now_m <= stop_m:
+                return
+            else:
+                wait_m = (start_m - now_m) % (60 * 24)
+                line = 'the schedule is from %s to %s, need to wait %d hours and %d minutes' % (
+                    schedule['start'], schedule['stop'], wait_m / 60, wait_m % 60)
+
+                print line
+                logger.warn(line)
+                time.sleep(60)
+
+        else:
+            if now_m > stop_m and now_m < start_m:
+                wait_m = (start_m - now_m) % (60 * 24)
+                line = 'the schedule is from %s to %s, need to wait %d hours and %d minutes' % (
+                    schedule['start'], schedule['stop'], wait_m / 60, wait_m % 60)
+
+                print line
+                logger.warn(line)
+                time.sleep(60)
+            else:
+                return
 
 
 if __name__ == "__main__":
