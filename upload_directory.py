@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import time
 
 import boto3
 from botocore.client import Config
@@ -10,13 +11,18 @@ from botocore.client import Config
 access_key = 'ziw5dp1alvty9n47qksu'
 secret_key = 'V+ZTZ5u5wNvXb+KP5g0dMNzhMeWe372/yRKx4hZV'
 bucket_name = 'renzhi-test-bucket'
+report_interval = 30
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-file_handler = logging.FileHandler('/tmp/upload_directory.log')
-formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
+
+mega = 1024.0 * 1024.0
+
+
+stat = {
+    'bytes_uploaded': 0,
+    'start_time': time.time(),
+    'bandwidth': 10,  # 10M
+    'report_time': time.time(),
+}
 
 
 def filter_dir(dir_name):
@@ -170,31 +176,86 @@ def upload_one_directory(dir_parts, base_len, key_prefix):
 
     fd = open(progress_file, 'a')
     for file_name in files_to_upload.keys():
-        logger.info('start to upload file: %s' % file_name)
+        logger.warn('start to upload file: %s' % file_name)
 
         info = upload_one_file(file_name, base_len, key_prefix)
         if info == None:
             continue
+
+        if info['local_size'] != info['resp_size']:
+            logger.error('file size not equal, local_size: %d, response size: %d'
+                         % (info['local_size'], info['resp_size']))
+
         upload_time = get_iso_now()
         line = '%s %s %s %d %d %s\n' % (file_name, info['file_key'], info['etag'],
                                         info['local_size'], info['resp_size'], upload_time)
         fd.write(line)
+
+        stat['bytes_uploaded'] = stat['bytes_uploaded'] + info['local_size']
+        time_need = stat['bytes_uploaded'] / (mega * stat['bandwidth'])
+        ts_now = time.time()
+        time_to_sleep = stat['start_time'] + time_need - ts_now
+
+        if ts_now - stat['report_time'] > report_interval:
+            stat['report_time'] = ts_now
+            time_used = ts_now - stat['start_time']
+            report_str = ('upload stat, bytes uploaded: %dM, time used: %fs, bandwidth: %f Mbytes/s'
+                          % (stat['bytes_uploaded'] / mega, time_used,
+                              stat['bytes_uploaded'] / time_used / mega))
+            logger.warn(report_str)
+            print report_str
+
+        if time_to_sleep > 0:
+            logger.warn('about to sleep %f seconds to slow down' %
+                        time_to_sleep)
+            time.sleep(time_to_sleep)
+
     fd.close()
 
 
 def run(dir_name, key_prefix):
     if dir_name.endswith('/'):
-        logger.error('the directory name is endswith /')
+        print 'do not add / to the directory name: ' + dir_name
         return
 
     if not dir_name.startswith('/'):
-        logger.error('the directory name is not startswith /')
+        print 'the directory name is not absolute path: ' + dir_name
+        return
+
+    if not os.path.exists(dir_name) or not os.path.isdir(dir_name):
+        print dir_name + ' is not exists or is not a directory'
         return
 
     base_len = len(dir_name.split('/')) - 1
 
+    print 'start to upload ' + dir_name + ' to ' + key_prefix
     for dir_parts in dir_iter(dir_name):
         upload_one_directory(dir_parts, base_len, key_prefix)
 
 
-run('/root/test', 'ppp')
+if __name__ == "__main__":
+
+    import sys
+
+    dir_name = sys.argv[1]
+    key_prefix = sys.argv[2]
+    log_dir = sys.argv[3]
+    bandwidth = sys.argv[4]
+
+    stat['bandwidth'] = float(bandwidth)
+
+    if not os.path.exists(log_dir) or not os.path.isdir(log_dir):
+        print log_dir + ' is not exists or is not a directory'
+        exit()
+
+    log_file = os.path.join(log_dir, 'upload-log-for-' +
+                            dir_name.replace('/', '_') + '.log')
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.WARN)
+    file_handler = logging.FileHandler(log_file)
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    run(dir_name, key_prefix)
