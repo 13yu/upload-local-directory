@@ -121,6 +121,11 @@ def upload_one_file(file_name, base_len, key_prefix):
     key = os.path.join(key_prefix, '/'.join(file_parts[base_len:]))
 
     info = {}
+    try:
+        key = key.encode('utf-8')
+    except Exception as e:
+        logger.error('failed to encode the key: ' + repr(e))
+        return
 
     if os.path.isdir(file_name):
         info['local_size'] = 0
